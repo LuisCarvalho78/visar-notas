@@ -32,6 +32,7 @@
   button:hover { border-color: var(--muted); }
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   button.danger { color: var(--danger); }
+  button.danger.primary { background: var(--danger); border-color: var(--danger); color: #fff; }
   button:disabled { opacity: .5; cursor: default; }
   .meta { color: var(--muted); font-size: 12px; margin-top: 8px; min-height: 18px; }
   .status { font-size: 12px; margin-top: 6px; min-height: 18px; }
@@ -125,6 +126,7 @@
   }
 
   function carregar() {
+    if (typeof resetConfirm === "function") resetConfirm();
     setStatus("");
     dirty = false;
     props = null;
@@ -169,7 +171,7 @@
     if (noOffice) { setStatus("Pré-visualização: abra no Outlook para guardar.", "err"); return; }
     if (!props) return;
     var texto = nota.value.replace(/\s+$/, "");
-    if (!texto) { apagar(); return; }
+    if (!texto) { apagar(true); return; }
     setBusy(true);
     props.set(PROP_TEXTO, texto);
     props.set(PROP_DATA, carimbo());
@@ -188,11 +190,27 @@
     });
   }
 
-  function apagar() {
+  // O Outlook bloqueia window.confirm nos suplementos: confirmação em dois cliques no próprio botão
+  var confirmTimer = null;
+  function resetConfirm() {
+    clearTimeout(confirmTimer);
+    confirmTimer = null;
+    el("btnApagar").textContent = "Apagar nota";
+    el("btnApagar").classList.remove("primary");
+  }
+
+  function apagar(semConfirmar) {
     if (noOffice) { setStatus("Pré-visualização: abra no Outlook para apagar.", "err"); return; }
     if (!props) return;
     if (!props.get(PROP_TEXTO) && !nota.value.trim()) { setStatus("Não há nota para apagar.", ""); return; }
-    if (!window.confirm("Apagar a nota deste email?")) return;
+    if (semConfirmar !== true && !confirmTimer) {
+      el("btnApagar").textContent = "Confirmar apagar";
+      el("btnApagar").classList.add("primary");
+      setStatus("Clique outra vez para apagar a nota.", "err");
+      confirmTimer = setTimeout(function () { resetConfirm(); setStatus(""); }, 5000);
+      return;
+    }
+    resetConfirm();
     setBusy(true);
     props.remove(PROP_TEXTO);
     props.remove(PROP_DATA);
