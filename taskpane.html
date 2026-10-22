@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visar Notas</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --ink: #1f2328; --muted: #6b7280; --line: #e5e7eb;
+    --note: #fff8c5; --note-line: #e9d36b; --accent: #0f6cbd; --accent-ink: #ffffff;
+    --danger: #b42318; --ok: #12753a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1f1f1f; --ink: #f3f4f6; --muted: #a1a1aa; --line: #3f3f46;
+            --note: #3a3520; --note-line: #6b5e21; --accent: #479ef5; --accent-ink: #0b0b0b;
+            --danger: #f97066; --ok: #4ade80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 14px; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 12px; margin: 0 0 12px; white-space: nowrap;
+         overflow: hidden; text-overflow: ellipsis; }
+  textarea { width: 100%; min-height: 200px; resize: vertical; padding: 10px;
+             border: 1px solid var(--note-line); border-radius: 6px; background: var(--note);
+             color: var(--ink); font: inherit; }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  button { border: 1px solid var(--line); background: transparent; color: var(--ink);
+           padding: 7px 12px; border-radius: 6px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button.danger { color: var(--danger); }
+  button:disabled { opacity: .5; cursor: default; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 8px; min-height: 18px; }
+  .status { font-size: 12px; margin-top: 6px; min-height: 18px; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--danger); }
+  .legacy { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .legacy h2 { font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+  .legacy li { margin: 4px 0; font-size: 13px; }
+  .legacy button { padding: 2px 8px; font-size: 12px; margin-left: 6px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 14px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <h1>Nota deste email</h1>
+  <p class="sub" id="assunto">A carregar...</p>
+
+  <textarea id="nota" placeholder="Escreva a nota. Ctrl+Enter guarda."></textarea>
+
+  <div class="row">
+    <button id="btnData" type="button">Data e hora</button>
+    <button id="btnGuardar" type="button" class="primary">Guardar</button>
+    <button id="btnApagar" type="button" class="danger">Apagar nota</button>
+  </div>
+  <div class="meta" id="meta"></div>
+  <div class="status" id="status" role="status"></div>
+
+  <section class="legacy" id="legacy" hidden>
+    <h2>Notas antigas do Notes4Email</h2>
+    <ul id="legacyList"></ul>
+  </section>
+
+  <p class="hint">A nota fica gravada neste email e só este suplemento a lê. Emails com nota recebem a categoria "Nota".</p>
+
+<script>
+(function () {
+  "use strict";
+
+  var PROP_TEXTO = "visarNota";
+  var PROP_DATA = "visarNotaData";
+  var CATEGORIA = "Nota";
+  var MESES = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
+
+  var el = function (id) { return document.getElementById(id); };
+  var nota = el("nota"), meta = el("meta"), status = el("status");
+  var props = null;
+  var dirty = false;
+  var noOffice = false;
+
+  function carimbo(d) {
+    d = d || new Date();
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getDate()) + "-" + MESES[d.getMonth()] + "-" + d.getFullYear() +
+           " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
+  function setStatus(msg, tipo) {
+    status.textContent = msg || "";
+    status.className = "status" + (tipo ? " " + tipo : "");
+  }
+
+  function setBusy(b) {
+    ["btnGuardar", "btnApagar", "btnData"].forEach(function (id) { el(id).disabled = b; });
+  }
+
+  function mostrarMeta() {
+    var data = props && props.get(PROP_DATA);
+    meta.textContent = data ? "Última alteração: " + data : "Este email ainda não tem nota.";
+  }
+
+  function mostrarNotasAntigas(item) {
+    var lista = el("legacyList");
+    lista.innerHTML = "";
+    var anexos = (item && item.attachments) || [];
+    var antigas = anexos.filter(function (a) { return (a.name || "").indexOf("[n4e]") !== -1; });
+    el("legacy").hidden = antigas.length === 0;
+    antigas.forEach(function (a) {
+      var texto = a.name.replace(/\s*-\s*\[n4e\]\s*$/, "").trim();
+      var li = document.createElement("li");
+      li.appendChild(document.createTextNode(texto));
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = "Copiar para a nota";
+      b.addEventListener("click", function () {
+        nota.value = nota.value ? nota.value.replace(/\s*$/, "") + "\n" + texto : texto;
+        dirty = true;
+        setStatus("Texto copiado. Carregue em Guardar.", "");
+      });
+      li.appendChild(b);
+      lista.appendChild(li);
+    });
+  }
+
+  function carregar() {
+    setStatus("");
+    dirty = false;
+    props = null;
+    var item = Office.context.mailbox.item;
+    if (!item) {
+      el("assunto").textContent = "Selecione um email.";
+      nota.value = "";
+      meta.textContent = "";
+      el("legacy").hidden = true;
+      setBusy(true);
+      return;
+    }
+    el("assunto").textContent = item.subject || "(sem assunto)";
+    setBusy(true);
+    item.loadCustomPropertiesAsync(function (r) {
+      setBusy(false);
+      if (r.status !== Office.AsyncResultStatus.Succeeded) {
+        setStatus("Não consegui ler a nota: " + r.error.message, "err");
+        return;
+      }
+      props = r.value;
+      nota.value = props.get(PROP_TEXTO) || "";
+      mostrarMeta();
+      mostrarNotasAntigas(item);
+      nota.focus();
+    });
+  }
+
+  function aplicarCategoria(adicionar, done) {
+    var cats = Office.context.mailbox.item.categories;
+    var fn = adicionar ? cats.addAsync : cats.removeAsync;
+    fn.call(cats, [CATEGORIA], function (r) {
+      if (r.status !== Office.AsyncResultStatus.Succeeded && adicionar) {
+        done("Nota guardada. Falta criar a categoria \"" + CATEGORIA + "\" no Outlook (ver README).");
+        return;
+      }
+      done(null);
+    });
+  }
+
+  function guardar() {
+    if (noOffice) { setStatus("Pré-visualização: abra no Outlook para guardar.", "err"); return; }
+    if (!props) return;
+    var texto = nota.value.replace(/\s+$/, "");
+    if (!texto) { apagar(); return; }
+    setBusy(true);
+    props.set(PROP_TEXTO, texto);
+    props.set(PROP_DATA, carimbo());
+    props.saveAsync(function (r) {
+      if (r.status !== Office.AsyncResultStatus.Succeeded) {
+        setBusy(false);
+        setStatus("Erro ao guardar: " + r.error.message, "err");
+        return;
+      }
+      dirty = false;
+      mostrarMeta();
+      aplicarCategoria(true, function (aviso) {
+        setBusy(false);
+        setStatus(aviso || "Nota guardada.", aviso ? "err" : "ok");
+      });
+    });
+  }
+
+  function apagar() {
+    if (noOffice) { setStatus("Pré-visualização: abra no Outlook para apagar.", "err"); return; }
+    if (!props) return;
+    if (!props.get(PROP_TEXTO) && !nota.value.trim()) { setStatus("Não há nota para apagar.", ""); return; }
+    if (!window.confirm("Apagar a nota deste email?")) return;
+    setBusy(true);
+    props.remove(PROP_TEXTO);
+    props.remove(PROP_DATA);
+    props.saveAsync(function (r) {
+      if (r.status !== Office.AsyncResultStatus.Succeeded) {
+        setBusy(false);
+        setStatus("Erro ao apagar: " + r.error.message, "err");
+        return;
+      }
+      nota.value = "";
+      dirty = false;
+      mostrarMeta();
+      aplicarCategoria(false, function () {
+        setBusy(false);
+        setStatus("Nota apagada.", "ok");
+      });
+    });
+  }
+
+  function inserirCarimbo() {
+    var c = carimbo();
+    var ini = nota.selectionStart, fim = nota.selectionEnd, v = nota.value;
+    var antes = v.slice(0, ini);
+    var sep = antes && !/\s$/.test(antes) ? " " : "";
+    nota.value = antes + sep + c + " " + v.slice(fim);
+    var pos = (antes + sep + c + " ").length;
+    nota.focus();
+    nota.setSelectionRange(pos, pos);
+    dirty = true;
+  }
+
+  el("btnGuardar").addEventListener("click", guardar);
+  el("btnApagar").addEventListener("click", apagar);
+  el("btnData").addEventListener("click", inserirCarimbo);
+  nota.addEventListener("input", function () { dirty = true; setStatus(""); });
+  nota.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "Enter" || e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      guardar();
+    }
+  });
+
+  function iniciarSemOffice() {
+    noOffice = true;
+    el("assunto").textContent = "Pré-visualização fora do Outlook";
+    meta.textContent = "Este email ainda não tem nota.";
+  }
+
+  if (typeof Office === "undefined") { iniciarSemOffice(); return; }
+
+  Office.onReady(function (info) {
+    if (!info || info.host !== Office.HostType.Outlook) { iniciarSemOffice(); return; }
+    carregar();
+    // Com o painel fixado, recarrega quando se muda de email
+    if (Office.context.mailbox.addHandlerAsync) {
+      Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, function () {
+        var perdeu = dirty && props && nota.value.trim();
+        carregar();
+        if (perdeu) setStatus("Atenção: a nota do email anterior não foi guardada.", "err");
+      });
+    }
+  });
+})();
+</script>
+</body>
+</html>
